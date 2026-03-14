@@ -1,0 +1,12 @@
+services:
+  cc-spend:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /data/transactions.db
+    volumes:
+      - cc_data:/data
+
+volumes:
+  cc_data:
