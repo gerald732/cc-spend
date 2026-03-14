@@ -1,12 +1,10 @@
 services:
   cc-spend:
-    build: .
+    image: cc-spend:latest
     restart: unless-stopped
-    env_file: .env
-    environment:
-      DB_PATH: /data/transactions.db
+    env_file: /docker/cc-spend/.env
+    ports:
+      - "9090:9090"
     volumes:
-      - cc_data:/data
-
-volumes:
-  cc_data:
+      - /docker/cc-spend:/data
+      - /docker/cc-spend/cards.yml:/app/cards.yml:ro

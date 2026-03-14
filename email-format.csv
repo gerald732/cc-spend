@@ -1,4 +1,4 @@
 Bank,Gmail Folder/Label,From Address,Subject Filter,Merchant Regex Pattern
-Citi,[Gmail]Labels/Citibank,alerts@citibank.com.sg,Citi Alerts - Credit Card/Ready Credit Transaction,Transaction details\s+:(.*)\n
-DBS,[Gmail]Labels/iBank,ibanking.alert@dbs.com,Card Transaction Alert,To:\s+(.*)\n
-UOB,[Gmail]Labels/iBank,unialerts@uobgroup.com,UOB - Transaction Alert,"At\s+(.*)\.\s+If\s+unauthorised,"
+Citi,[Gmail]/Labels/Citibank,alerts@citibank.com.sg,Citi Alerts - Credit Card/Ready Credit Transaction,Transaction\s+details\s*:(.*)\n
+DBS,[Gmail]/Labels/iBank,ibanking.alert@dbs.com,Card Transaction Alert,To:\s+(.*)\n
+UOB,[Gmail]/Labels/iBank,unialerts@uobgroup.com,UOB - Transaction Alert,"At\s+(.*)\.\s+If\s+unauthorised,"

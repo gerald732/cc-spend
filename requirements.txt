@@ -1,4 +1,5 @@
 python-dotenv
+pyyaml
 rapidfuzz
-paho-mqtt
 anthropic
+prometheus_client

@@ -1,25 +1,47 @@
 import imaplib
 import email
 import logging
+import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from html.parser import HTMLParser
 
 import config
 import database
 import categorizer
 import caps
-import mqtt_client
-from parser import PARSERS
+import metrics
+import telegram_client
+from parser import BANK_PARSER_CLASSES
 
 logger = logging.getLogger(__name__)
 
-# Map Gmail label → list of (card_type, parser) pairs
-_LABEL_PARSERS: dict[str, list[tuple[str, object]]] = {
-    "[Gmail]/Citibank": [("CITI_REWARDS", PARSERS["CITI_REWARDS"])],
-    "[Gmail]/iBank": [
-        ("DBS_WWMC", PARSERS["DBS_WWMC"]),
-        ("UOB_LADY", PARSERS["UOB_LADY"]),
-    ],
+_BACKOFF_BASE = 30       # seconds
+_BACKOFF_MAX = 1800      # 30 minutes
+_BACKOFF_FACTOR = 2
+_BACKOFF_JITTER = 0.2    # ±20%
+
+
+def _build_label_parsers() -> dict[str, list[tuple[str, object]]]:
+    label_parsers: dict[str, list] = {}
+    for card in config.CARDS:
+        parser_cls = BANK_PARSER_CLASSES.get(card.bank)
+        if parser_cls is None:
+            raise ValueError(
+                f"Unknown bank key {card.bank!r} in CARDS config. "
+                f"Valid keys: {list(BANK_PARSER_CLASSES)}"
+            )
+        parser = parser_cls(card.identifier)
+        label_parsers.setdefault(card.label, []).append((card.card_type, parser))
+    return label_parsers
+
+
+# Built at startup from CARDS env var — no code change needed to add a new card.
+_LABEL_PARSERS: dict[str, list[tuple[str, object]]] = _build_label_parsers()
+
+# card_type → online_bypass flag, for fast lookup in _process_message
+_ONLINE_BYPASS: dict[str, bool] = {
+    card.card_type: card.online_bypass for card in config.CARDS
 }
 
 
@@ -30,9 +52,10 @@ def _connect() -> imaplib.IMAP4_SSL:
 
 
 def _fetch_unseen(conn: imaplib.IMAP4_SSL, label: str) -> list[tuple[bytes, str]]:
-    """Return list of (uid, body) for unseen messages in label."""
+    """Return list of (uid, body) for unseen messages in label received in the last 24 hours."""
     conn.select(f'"{label}"', readonly=False)
-    _, data = conn.uid("search", None, "UNSEEN")
+    since = (datetime.now() - timedelta(hours=24)).strftime("%d-%b-%Y")
+    _, data = conn.uid("search", None, f'(UNSEEN SINCE {since})')
     uids = data[0].split()
     results = []
     for uid in uids:
@@ -44,12 +67,59 @@ def _fetch_unseen(conn: imaplib.IMAP4_SSL, label: str) -> list[tuple[bytes, str]
     return results
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """Strip HTML tags and CSS/script blocks, returning visible text."""
+    def __init__(self):
+        super().__init__()
+        self._lines: list[str] = []
+        self._skip = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script"):
+            self._skip = True
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script"):
+            self._skip = False
+
+    def handle_data(self, data):
+        if not self._skip:
+            stripped = data.strip()
+            if stripped:
+                self._lines.append(stripped)
+
+    def get_text(self) -> str:
+        return "\n".join(self._lines)
+
+
+def _html_to_text(html: str) -> str:
+    extractor = _HTMLTextExtractor()
+    extractor.feed(html)
+    return extractor.get_text()
+
+
 def _extract_body(msg: email.message.Message) -> str:
+    plain = html = None
     if msg.is_multipart():
         for part in msg.walk():
-            if part.get_content_type() == "text/plain":
-                return part.get_payload(decode=True).decode(errors="replace")
-    return msg.get_payload(decode=True).decode(errors="replace")
+            ct = part.get_content_type()
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            if ct == "text/plain" and plain is None:
+                plain = payload.decode(errors="replace")
+            elif ct == "text/html" and html is None:
+                html = payload.decode(errors="replace")
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload:
+            plain = payload.decode(errors="replace")
+
+    if plain:
+        return plain
+    if html:
+        return _html_to_text(html)
+    return ""
 
 
 def _mark_seen(conn: imaplib.IMAP4_SSL, uid: bytes):
@@ -69,7 +139,7 @@ def _process_message(uid: bytes, body: str, card_type: str, parser, conn: imapli
         return
 
     merchant, amount = result
-    if card_type in config.ONLINE_CARD_TYPES:
+    if _ONLINE_BYPASS.get(card_type, False):
         category = "ONLINE"
     else:
         category = categorizer.categorize_with_claude_fallback(merchant)
@@ -78,23 +148,27 @@ def _process_message(uid: bytes, body: str, card_type: str, parser, conn: imapli
     timestamp = datetime.now(timezone.utc).isoformat()
     database.insert_transaction(timestamp, merchant, amount, card_type, final_category)
     logger.info("Inserted: %s %.2f %s %s", merchant, amount, card_type, final_category)
+    metrics.transactions_processed.labels(card_type=card_type, category=final_category).inc()
 
     _mark_seen(conn, uid)
-    mqtt_client.publish_all()
+    telegram_client.send_transaction(merchant, amount, card_type, final_category)
 
 
-def poll_once():
+def poll_once() -> bool:
+    """Poll all labels once. Returns True on success, False if IMAP connect failed."""
     try:
         conn = _connect()
     except Exception:
         logger.exception("IMAP connect failed")
-        return
+        metrics.imap_failures.labels(reason="connect").inc()
+        return False
 
     for label, parsers in _LABEL_PARSERS.items():
         try:
             messages = _fetch_unseen(conn, label)
         except Exception:
             logger.exception("Failed fetching label %s", label)
+            metrics.imap_failures.labels(reason="fetch").inc()
             continue
 
         for uid, body in messages:
@@ -106,10 +180,20 @@ def poll_once():
                     break
 
     conn.logout()
+    return True
 
 
 def run_loop():
     logger.info("Starting poll loop every %ds", config.POLL_INTERVAL_SECONDS)
+    backoff = _BACKOFF_BASE
     while True:
-        poll_once()
-        time.sleep(config.POLL_INTERVAL_SECONDS)
+        success = poll_once()
+        if success:
+            backoff = _BACKOFF_BASE  # reset on success
+            time.sleep(config.POLL_INTERVAL_SECONDS)
+        else:
+            jitter = backoff * _BACKOFF_JITTER * (2 * random.random() - 1)
+            sleep_time = min(backoff + jitter, _BACKOFF_MAX)
+            logger.warning("Poll failed; retrying in %.0fs (backoff)", sleep_time)
+            time.sleep(sleep_time)
+            backoff = min(backoff * _BACKOFF_FACTOR, _BACKOFF_MAX)

@@ -25,6 +25,7 @@ MCC references:
 """
 
 import logging
+import time
 from rapidfuzz import process
 import anthropic
 import config
@@ -33,9 +34,10 @@ logger = logging.getLogger(__name__)
 
 # MCC → simplified category
 MCC_CATEGORY: dict[int, str] = {
-    5411: "GROCERIES",
-    5412: "GROCERIES",
-    5499: "GROCERIES",
+    5411: "FAMILY",
+    5412: "FAMILY",
+    5499: "DINING",    # Misc Food Stores — counts as dining per UOB Lady benefit rules
+    5641: "FAMILY",    # Children's/infants' wear stores
     5812: "DINING",
     5814: "DINING",
     5811: "DINING",
@@ -132,14 +134,16 @@ MERCHANT_MCC: dict[str, int] = {
 }
 
 _THRESHOLD = 80
+_CLAUDE_RETRIES = 2
+_CLAUDE_RETRY_DELAYS = [1, 2]  # seconds between attempts
 
 
-_VALID_CATEGORIES = {"GROCERIES", "DINING", "OTHER"}
+_VALID_CATEGORIES = {"FAMILY", "DINING", "OTHER"}
 
 _SYSTEM_PROMPT = (
     "You are a merchant category classifier for Singapore credit cards. "
     "Given a merchant name, respond with exactly one word: "
-    "GROCERIES, DINING, or OTHER. No explanation."
+    "FAMILY, DINING, or OTHER. No explanation."
 )
 
 
@@ -162,20 +166,33 @@ def categorize_with_claude_fallback(merchant: str) -> str:
         logger.warning("No ANTHROPIC_API_KEY set; cannot classify '%s' via Claude", merchant)
         return "OTHER"
 
-    try:
-        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=10,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": merchant}],
-        )
-        word = response.content[0].text.strip().upper()
-        if word in _VALID_CATEGORIES:
-            logger.info("Claude classified '%s' → %s", merchant, word)
-            return word
-        logger.warning("Claude returned unexpected category '%s' for '%s'", word, merchant)
-    except Exception:
-        logger.exception("Claude fallback failed for merchant '%s'", merchant)
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    for attempt in range(_CLAUDE_RETRIES + 1):
+        try:
+            response = client.messages.create(
+                model="claude-opus-4-6",
+                max_tokens=10,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": merchant}],
+            )
+            word = response.content[0].text.strip().upper()
+            if word in _VALID_CATEGORIES:
+                logger.info("Claude classified '%s' → %s", merchant, word)
+                return word
+            # Bad response is not retryable
+            logger.warning("Claude returned unexpected category '%s' for '%s'", word, merchant)
+            return "OTHER"
+        except Exception:
+            if attempt < _CLAUDE_RETRIES:
+                delay = _CLAUDE_RETRY_DELAYS[attempt]
+                logger.warning(
+                    "Claude fallback attempt %d/%d failed for '%s'; retrying in %ds",
+                    attempt + 1, _CLAUDE_RETRIES + 1, merchant, delay,
+                )
+                time.sleep(delay)
+            else:
+                import metrics  # late import to avoid circular dependency at module load
+                logger.exception("Claude fallback exhausted for merchant '%s'", merchant)
+                metrics.claude_failures.inc()
 
     return "OTHER"
