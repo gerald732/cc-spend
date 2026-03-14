@@ -23,7 +23,37 @@ python -m pytest test_cc_spend.py -v
 python main.py
 ```
 
-Metrics and healthcheck will be available at `http://localhost:9090/metrics` and `http://localhost:9090/healthz` once the service is running.
+Three endpoints are available on `METRICS_PORT` (default 9090) once the service is running:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /healthz` | Returns `200 OK` while the process is alive — used by Docker health checks and uptime monitors |
+| `GET /metrics` | Prometheus scrape endpoint |
+| `GET /status` | JSON spend summary — current period totals vs caps for all cards |
+
+To verify the service is running and the DB is populated correctly (e.g. after seeding):
+```bash
+curl http://localhost:9090/status
+```
+```json
+{
+  "UOB_LADY": {
+    "period_start": "2026-03-01",
+    "categories": {
+      "FAMILY": {"spent": 179.22, "cap": 750.0, "remaining": 570.78},
+      "DINING": {"spent": 432.77, "cap": 750.0, "remaining": 317.23}
+    }
+  },
+  "DBS_WWMC": {
+    "period_start": "2026-03-01",
+    "spent": 194.08, "cap": 1000.0, "remaining": 805.92
+  },
+  "CITI_REWARDS": {
+    "period_start": "2026-02-15",
+    "spent": 142.92, "cap": 1000.0, "remaining": 857.08
+  }
+}
+```
 
 ## How it works
 
@@ -121,6 +151,46 @@ mkdir -p /docker/cc-spend
 cp .env.example /docker/cc-spend/.env        # then fill in your values
 cp cards.example.yml /docker/cc-spend/cards.yml  # then fill in your cards
 ```
+
+## Prefilling historical spend (mid-month setup)
+
+If you start the service mid-billing-period, the DB will have no prior transactions and cap logic will behave as if you have spent $0. Use `seed_db.py` to inject your actual spend from earlier in the month so cap thresholds are accurate from the first real transaction.
+
+**This is a one-off manual step — never run it more than once against the same database, as it will double-insert every row.**
+
+`seed_db.py` is already baked into the container image (`COPY *.py .`), so you do not need to open a shell or copy files. The script reads `DB_PATH` from the environment, which points at the same `/data/transactions.db` volume the service uses.
+
+### Step 1 — edit the seed data
+
+On the Docker host, open `seed_db.py` from your local checkout and edit the `SEED` list to match your actual transactions for the current billing period. The `category` field should be the value that `apply_cap` would have assigned at the time — e.g. `FAMILY`, `DINING`, `OTHER`. Only use `EXCEEDED` if the cap was already blown before that row.
+
+### Step 2 — rebuild the image
+
+```bash
+docker build -t cc-spend:latest .
+```
+
+### Step 3 — dry-run (preview only, no writes)
+
+```bash
+docker run --rm --env-file /docker/cc-spend/.env -v /docker/cc-spend/data:/data -v /docker/cc-spend/cards.yml:/app/cards.yml:ro cc-spend:latest python seed_db.py --dry-run
+```
+
+### Step 4 — insert
+
+```bash
+docker run --rm --env-file /docker/cc-spend/.env -v /docker/cc-spend/data:/data -v /docker/cc-spend/cards.yml:/app/cards.yml:ro cc-spend:latest python seed_db.py
+```
+
+The script prints post-seed totals per card on completion. Verify the numbers, then start the service normally.
+
+### Step 5 — start the service
+
+```bash
+docker compose up -d
+```
+
+> If the service is already running and you need to reseed, stop it first (`docker compose down`) to avoid concurrent writes to the SQLite file, then repeat from Step 2.
 
 ## Running tests
 

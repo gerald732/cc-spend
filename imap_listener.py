@@ -163,23 +163,24 @@ def poll_once() -> bool:
         metrics.imap_failures.labels(reason="connect").inc()
         return False
 
-    for label, parsers in _LABEL_PARSERS.items():
-        try:
-            messages = _fetch_unseen(conn, label)
-        except Exception:
-            logger.exception("Failed fetching label %s", label)
-            metrics.imap_failures.labels(reason="fetch").inc()
-            continue
+    try:
+        for label, parsers in _LABEL_PARSERS.items():
+            try:
+                messages = _fetch_unseen(conn, label)
+            except Exception:
+                logger.exception("Failed fetching label %s", label)
+                metrics.imap_failures.labels(reason="fetch").inc()
+                continue
 
-        for uid, body in messages:
-            for card_type, parser in parsers:
-                # Match by sender to route to the right parser
-                sender_header = _get_sender(conn, uid)
-                if parser.FROM.lower() in sender_header:
-                    _process_message(uid, body, card_type, parser, conn)
-                    break
-
-    conn.logout()
+            for uid, body in messages:
+                for card_type, parser in parsers:
+                    # Match by sender to route to the right parser
+                    sender_header = _get_sender(conn, uid)
+                    if parser.FROM.lower() in sender_header:
+                        _process_message(uid, body, card_type, parser, conn)
+                        break
+    finally:
+        conn.logout()
     return True
 
 

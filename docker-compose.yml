@@ -1,6 +1,8 @@
 services:
   cc-spend:
+    build: .
     image: cc-spend:latest
+    pull_policy: never
     restart: unless-stopped
     env_file: /docker/cc-spend/.env
     ports:

@@ -137,8 +137,17 @@ _THRESHOLD = 80
 _CLAUDE_RETRIES = 2
 _CLAUDE_RETRY_DELAYS = [1, 2]  # seconds between attempts
 
-
 _VALID_CATEGORIES = {"FAMILY", "DINING", "OTHER"}
+
+_anthropic_client: "anthropic.Anthropic | None" = None
+
+
+def _get_client() -> "anthropic.Anthropic":
+    global _anthropic_client
+    if _anthropic_client is None:
+        _anthropic_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    return _anthropic_client
+
 
 _SYSTEM_PROMPT = (
     "You are a merchant category classifier for Singapore credit cards. "
@@ -166,7 +175,7 @@ def categorize_with_claude_fallback(merchant: str) -> str:
         logger.warning("No ANTHROPIC_API_KEY set; cannot classify '%s' via Claude", merchant)
         return "OTHER"
 
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    client = _get_client()
     for attempt in range(_CLAUDE_RETRIES + 1):
         try:
             response = client.messages.create(
