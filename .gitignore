@@ -6,3 +6,4 @@ cards.yml
 *.db
 parse_errors.log
 .claude
+.venv/
