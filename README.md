@@ -1,6 +1,6 @@
 # cc-spend
 
-Monitors Singapore credit card transaction alert emails via IMAP and publishes spending totals to Home Assistant over MQTT.
+Monitors Singapore credit card transaction alert emails via IMAP and sends per-transaction alerts and spending summaries via Telegram.
 
 ## Local development
 
@@ -85,7 +85,7 @@ Each card entry in `CARDS` sets its own `ONLINE_BYPASS` flag. Cards with `true` 
 - Two Gmail labels set up as filters for bank alert emails:
   - `[Gmail]/Citibank` — for Citi alert emails
   - `[Gmail]/iBank` — for DBS and UOB alert emails
-- Home Assistant with an MQTT broker (e.g. Mosquitto)
+- Telegram bot (token + chat ID)
 
 ### Install dependencies
 
@@ -95,7 +95,7 @@ pip install -r requirements.txt
 
 ### Configure `.env`
 
-Copy `.env` and fill in your values:
+Copy `.env.example` to `.env` and fill in your values:
 
 ```ini
 # Gmail IMAP
@@ -103,26 +103,36 @@ GMAIL_USER=you@gmail.com
 GMAIL_APP_PASSWORD=your_app_password_here
 IMAP_SERVER=imap.gmail.com
 
-# Telegram bot
+# Telegram bot (for per-transaction alerts and 6-hourly summaries)
+# Create a bot via @BotFather, add it to your group, then get the chat ID.
 TELEGRAM_TOKEN=your_bot_token_here
 TELEGRAM_CHAT_ID=your_chat_id_here
+
+# How often to send a spend summary (seconds, default: 6 hours)
 SUMMARY_INTERVAL_SECONDS=21600
 
 # Citi billing period reset day (1-28)
-CITI_STATEMENT_DATE=15
+CITI_STATEMENT_DATE=25
 
 # Poll interval in seconds (default: 3 hours)
 POLL_INTERVAL_SECONDS=10800
 
-# SQLite database path
-DB_PATH=transactions.db
+# SQLite database path (override in Docker to point at the mounted volume)
+DB_PATH=/data/transactions.db
 
-# Card definitions (BANK_KEY|GMAIL_LABEL_SUFFIX|IDENTIFIER|CARD_TYPE|ONLINE_BYPASS)
-CARDS=CITI|Citibank|Citi Rewards|CITI_REWARDS|true,DBS|iBank|1798|DBS_WWMC|true,UOB|iBank|8631|UOB_LADY|false
+# Optional: Anthropic API key for Claude-powered merchant categorization fallback.
+# If unset, unknown merchants are recorded as OTHER without calling the API.
+ANTHROPIC_API_KEY=
 
-# Optional: Claude API key for unknown merchant fallback
-ANTHROPIC_API_KEY=sk-ant-...
+# Prometheus metrics + healthcheck port (default: 9090)
+METRICS_PORT=9090
+
+# Timezone for billing period boundary calculations.
+# Must match your local timezone — period resets are computed using the system clock.
+TZ=Asia/Singapore
 ```
+
+Card configuration lives in `cards.yml` (see `cards.example.yml` for the format) — not in `.env`.
 
 ### Run
 

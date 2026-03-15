@@ -15,11 +15,10 @@ Build a Python-based transaction parser and tracker following the specs in CLAUD
    - Implement the $1,000 cap for DBS WWMC.
 
 3. INTEGRATION:
-   - Create an MQTT module to publish current monthly totals to Home Assistant topics:
-     - `tele/credit_cards/uob_lady_groceries/state`
-     - `tele/credit_cards/uob_lady_dining/state`
-     - `tele/credit_cards/dbs_wwmc/state`
-   - Ensure the MQTT payload is JSON-formatted for HA sensors.
+   - Create a Telegram module to send notifications to a configured bot and chat ID:
+     - Per-transaction alert sent immediately after each new transaction is parsed.
+     - Periodic summary (every `SUMMARY_INTERVAL_SECONDS`) showing spend vs cap for all cards.
+   - Ensure messages are human-readable with progress bars and remaining cap amounts.
 
 4. SAFETY:
    - Ensure all database operations are atomic. 
