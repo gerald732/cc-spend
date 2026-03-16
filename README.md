@@ -58,7 +58,7 @@ curl http://localhost:9090/status
 ## How it works
 
 1. Polls Gmail (IMAP) on a configurable interval for unseen transaction alert emails
-2. Parses merchant name and amount from Citi, DBS, and UOB alert emails
+2. Parses merchant name and amount from configured bank alert emails
 3. Categorizes merchants (FAMILY, DINING, TRANSPORT, etc.) using fuzzy matching; falls back to Claude API for unknowns
 4. Tracks per-card spending caps and marks transactions as `EXCEEDED` when the cap is hit
 5. Stores every transaction in a SQLite database
@@ -66,15 +66,14 @@ curl http://localhost:9090/status
 
 ## Supported cards
 
-Cards are configured via `cards.yml`. Adding a new card from an existing bank (CITI, DBS, or UOB) requires only a `cards.yml` entry — no code changes. Adding support for an entirely new bank requires adding a parser class to `parser.py` (the sender address and email format are hardcoded per bank).
+Cards are configured via `cards.yml`. Both banks and cards are fully config-driven — no code changes are needed to add a new card or a new bank.
 
-| Bank key | Sender address         |
-|----------|------------------------|
-| `CITI`   | alerts@citibank.com.sg |
-| `DBS`    | ibanking.alert@dbs.com |
-| `UOB`    | unialerts@uobgroup.com |
+- **New card from an existing bank**: add an entry under `cards:` referencing an existing `banks:` key.
+- **New bank**: add an entry under `banks:` with the sender address and a merchant-name regex, then add cards referencing it.
 
-Each entry in `cards.yml` has an `online_bypass` flag. Cards with `online_bypass: true` skip merchant categorisation and are recorded as `ONLINE`.
+The three banks in `cards.example.yml` (`CITI`, `DBS`, `UOB`) are examples — you can define any bank entirely in config.
+
+Each card entry has an `online_bypass` flag. Cards with `online_bypass: true` skip merchant categorisation and are recorded as `ONLINE`.
 
 ## Setup
 
@@ -82,9 +81,7 @@ Each entry in `cards.yml` has an `online_bypass` flag. Cards with `online_bypass
 
 - Python 3.11+
 - Gmail account with **IMAP enabled** and an **App Password** (2FA required)
-- Two Gmail labels set up as filters for bank alert emails:
-  - `[Gmail]/Citibank` — for Citi alert emails
-  - `[Gmail]/iBank` — for DBS and UOB alert emails
+- Gmail labels set up as filters for bank alert emails matching the `label` values in your `cards.yml` (e.g. `[Gmail]/Labels/Citibank`, `[Gmail]/Labels/iBank`)
 - Telegram bot (token + chat ID)
 
 ### Install dependencies
@@ -168,7 +165,7 @@ cp cards.example.yml /docker/cc-spend/cards.yml  # then fill in your cards
 
 If you start the service mid-billing-period, the DB will have no prior transactions and cap logic will behave as if you have spent $0. Use `seed_db.py` to inject your actual spend from earlier in the month so cap thresholds are accurate from the first real transaction.
 
-**This is a one-off manual step — never run it more than once against the same database, as it will double-insert every row.**
+**This is a one-off manual step — never run it more than once against the same database. The script will refuse to run if the DB already has rows, but the underlying data would still be wrong.**
 
 `seed_db.py` is already baked into the container image (`COPY *.py .`), so you do not need to open a shell or copy files. The script reads `DB_PATH` from the environment, which points at the same `/data/transactions.db` volume the service uses.
 
@@ -259,7 +256,7 @@ Add an entry to `cards.yml` — no code changes needed:
 ```yaml
 cards:
   - bank: CITI
-    gmail_label: Citibank
+    label: "[Gmail]/Labels/Citibank"
     identifier: "Citi Prestige"
     card_type: CITI_PRESTIGE
     online_bypass: false
