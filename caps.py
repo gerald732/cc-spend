@@ -1,3 +1,5 @@
+"""Spending cap logic: period boundaries and cap-exceeded checks per card."""
+
 from datetime import datetime, date
 import database
 
@@ -7,6 +9,7 @@ CITI_CAP = 1000.0
 
 
 def get_period_start(card_type: str, citi_statement_date: int) -> datetime:
+    """Return the start of the current billing period for the given card."""
     today = date.today()
     if card_type in ("DBS_WWMC", "UOB_LADY"):
         return datetime(today.year, today.month, 1)
@@ -20,6 +23,7 @@ def get_period_start(card_type: str, citi_statement_date: int) -> datetime:
 
 
 def apply_cap(card_type: str, category: str, citi_statement_date: int) -> str:
+    """Return 'EXCEEDED' if the card's cap is blown for this category, else return category."""
     period_start = get_period_start(card_type, citi_statement_date)
 
     if card_type == "UOB_LADY" and category in ("FAMILY", "DINING"):

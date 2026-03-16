@@ -21,19 +21,32 @@ os.environ.setdefault("GMAIL_USER", "test@gmail.com")
 os.environ.setdefault("GMAIL_APP_PASSWORD", "test")
 
 _CARDS_YAML = """\
+banks:
+  CITI:
+    from_address: alerts@citibank.com.sg
+    subject: 'Citi Alerts - Credit Card/Ready Credit Transaction'
+    merchant_re: 'Transaction\\s+details\\s*:\\s*(.*)'
+  DBS:
+    from_address: ibanking.alert@dbs.com
+    subject: 'Card Transaction Alert'
+    merchant_re: 'To:\\s*(.*)'
+  UOB:
+    from_address: unialerts@uobgroup.com
+    subject: 'UOB - Transaction Alert'
+    merchant_re: 'at\\s+(.*?)\\.\\s+If\\s+unauthorised,'
 cards:
   - bank: CITI
-    gmail_label: Citibank
+    label: "[Gmail]/Labels/Citibank"
     identifier: "Citi Rewards"
     card_type: CITI_REWARDS
     online_bypass: true
   - bank: DBS
-    gmail_label: iBank
+    label: "[Gmail]/Labels/iBank"
     identifier: "1798"
     card_type: DBS_WWMC
     online_bypass: true
   - bank: UOB
-    gmail_label: iBank
+    label: "[Gmail]/Labels/iBank"
     identifier: "8631"
     card_type: UOB_LADY
     online_bypass: false
@@ -44,7 +57,7 @@ _tmp_cards.write(_CARDS_YAML)
 _tmp_cards.close()
 os.environ["CARDS_FILE"] = _tmp_cards.name
 
-import parser as p
+import email_parser as p
 import categorizer
 import database
 import caps
@@ -86,7 +99,11 @@ BROKEN_BODY = "This email has no useful content."
 
 class TestCitiParser(unittest.TestCase):
     def setUp(self):
-        self.parser = p.CitiParser()
+        self.parser = p.BankParser(
+            from_address="alerts@citibank.com.sg",
+            subject="Citi Alerts - Credit Card/Ready Credit Transaction",
+            merchant_re=r"Transaction\s+details\s*:\s*(.*)",
+        )
 
     def test_happy_path(self):
         merchant, amount = self.parser.parse(CITI_BODY)
@@ -104,7 +121,11 @@ class TestCitiParser(unittest.TestCase):
 
 class TestDBSParser(unittest.TestCase):
     def setUp(self):
-        self.parser = p.DBSParser()
+        self.parser = p.BankParser(
+            from_address="ibanking.alert@dbs.com",
+            subject="Card Transaction Alert",
+            merchant_re=r"To:\s*(.*)",
+        )
 
     def test_happy_path(self):
         merchant, amount = self.parser.parse(DBS_BODY)
@@ -117,7 +138,11 @@ class TestDBSParser(unittest.TestCase):
 
 class TestUOBParser(unittest.TestCase):
     def setUp(self):
-        self.parser = p.UOBParser()
+        self.parser = p.BankParser(
+            from_address="unialerts@uobgroup.com",
+            subject="UOB - Transaction Alert",
+            merchant_re=r"at\s+(.*?)\.\s+If\s+unauthorised,",
+        )
 
     def test_happy_path(self):
         merchant, amount = self.parser.parse(UOB_BODY)
@@ -167,6 +192,13 @@ class TestCategorizer(unittest.TestCase):
 # ===========================================================================
 
 class TestCategorizeWithClaudeFallback(unittest.TestCase):
+    def setUp(self):
+        # Reset the singleton so each test gets a fresh mock when patching the constructor.
+        categorizer._client_cache.clear()
+
+    def tearDown(self):
+        categorizer._client_cache.clear()
+
     def test_known_merchant_skips_claude(self):
         # NTUC matches fuzzy — Claude should never be called
         with patch("categorizer.anthropic") as mock_anthropic:
@@ -253,13 +285,13 @@ class TestCardConfig(unittest.TestCase):
 
     def test_load_three_cards(self):
         path = self._write_yaml(_CARDS_YAML)
-        cards = config._load_cards(path)
+        _, cards = config._load_config(path)
         self.assertEqual(len(cards), 3)
 
-    def test_label_prefix_is_added(self):
-        path = self._write_yaml("cards:\n  - bank: DBS\n    gmail_label: iBank\n    identifier: '1798'\n    card_type: DBS_WWMC\n    online_bypass: true\n")
-        cards = config._load_cards(path)
-        self.assertEqual(cards[0].label, "[Gmail]/Labels/iBank")
+    def test_label_passed_through_as_is(self):
+        path = self._write_yaml('cards:\n  - bank: DBS\n    label: "MyLabels/Bank"\n    identifier: \'1798\'\n    card_type: DBS_WWMC\n    online_bypass: true\n')
+        _, cards = config._load_config(path)
+        self.assertEqual(cards[0].label, "MyLabels/Bank")
 
     def test_online_bypass_parsed(self):
         cards = {c.card_type: c for c in config.CARDS}
@@ -267,8 +299,8 @@ class TestCardConfig(unittest.TestCase):
         self.assertFalse(cards["UOB_LADY"].online_bypass)
 
     def test_missing_identifier_becomes_none(self):
-        path = self._write_yaml("cards:\n  - bank: CITI\n    gmail_label: Citibank\n    card_type: CITI_REWARDS\n    online_bypass: true\n")
-        cards = config._load_cards(path)
+        path = self._write_yaml('cards:\n  - bank: CITI\n    label: "[Gmail]/Labels/Citibank"\n    card_type: CITI_REWARDS\n    online_bypass: true\n')
+        _, cards = config._load_config(path)
         self.assertIsNone(cards[0].identifier)
 
     def test_uob_lady_not_online_bypass(self):

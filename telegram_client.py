@@ -1,3 +1,5 @@
+"""Telegram notification client: per-transaction alerts and periodic spend summaries."""
+
 import json
 import logging
 import time
@@ -74,6 +76,7 @@ def _period_reset_date(card_type: str) -> str:
 
 
 def send_transaction(merchant: str, amount: float, card_type: str, category: str) -> None:
+    """Send a per-transaction Telegram alert with current period spend bars."""
     card_label = _CARD_LABELS.get(card_type, card_type)
     cat_label = _CAT_LABELS.get(category, category)
     icon = "⚠️" if category == "EXCEEDED" else "💳"
@@ -110,6 +113,7 @@ def send_transaction(merchant: str, amount: float, card_type: str, category: str
 
 
 def send_summary() -> None:
+    """Send a full spend summary across all cards to Telegram."""
     lines = ["📊 <b>Spend Summary</b>", ""]
 
     for card_type, card_label in _CARD_LABELS.items():
@@ -153,5 +157,3 @@ def run_summary_loop() -> None:
             send_summary()
         except Exception:
             logger.exception("Summary send failed")
-
-

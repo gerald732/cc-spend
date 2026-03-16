@@ -1,3 +1,5 @@
+"""Configuration loader: env vars and cards.yml."""
+
 import os
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -26,27 +28,48 @@ CARDS_FILE = os.getenv("CARDS_FILE", "cards.yml")
 
 
 @dataclass
+class BankConfig:
+    """Email routing and parsing config shared by all cards from one bank."""
+
+    from_address: str   # sender email used to route messages to this bank
+    subject: str        # expected email subject (informational)
+    merchant_re: str    # regex pattern (one capture group) to extract merchant name
+
+
+@dataclass
 class CardConfig:
-    bank: str             # CITI, DBS, or UOB — maps to a parser class
-    label: str            # full Gmail label, e.g. [Gmail]/Labels/Citibank
+    """Per-card configuration: which bank, which Gmail label, and spend tracking settings."""
+    bank: str             # must match a key in BANKS
+    label: str            # full IMAP label path, e.g. [Gmail]/Labels/Citibank
     identifier: str | None  # substring that must appear in email body; None = accept all
     card_type: str        # label used throughout the app, e.g. CITI_REWARDS
     online_bypass: bool   # if True, skip merchant categorization and record as ONLINE
 
 
-def _load_cards(path: str) -> list[CardConfig]:
-    with open(path) as f:
+def _load_config(path: str) -> tuple[dict[str, BankConfig], list[CardConfig]]:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    cards = []
-    for entry in data.get("cards", []):
-        cards.append(CardConfig(
+    banks = {
+        key.upper(): BankConfig(
+            from_address=str(entry["from_address"]),
+            subject=str(entry["subject"]),
+            merchant_re=str(entry["merchant_re"]),
+        )
+        for key, entry in data.get("banks", {}).items()
+    }
+    cards = [
+        CardConfig(
             bank=str(entry["bank"]).upper(),
-            label=f"[Gmail]/Labels/{entry['gmail_label']}",
+            label=str(entry["label"]),
             identifier=str(entry["identifier"]) if entry.get("identifier") else None,
             card_type=str(entry["card_type"]),
             online_bypass=bool(entry.get("online_bypass", False)),
-        ))
-    return cards
+        )
+        for entry in data.get("cards", [])
+    ]
+    return banks, cards
 
 
-CARDS: list[CardConfig] = _load_cards(CARDS_FILE)
+BANKS: dict[str, BankConfig]
+CARDS: list[CardConfig]
+BANKS, CARDS = _load_config(CARDS_FILE)

@@ -7,7 +7,12 @@ Usage:
 """
 
 import sys
+import os
+import sqlite3
+
 import database
+import caps
+import config
 
 database.init_db()
 
@@ -27,53 +32,51 @@ DRY_RUN = "--dry-run" in sys.argv
 SEED: list[tuple[str, str, float, str, str]] = [
     # ── UOB Lady ──────────────────────────────────────────────────────────
     # (EAT. @ TIONG BAHRU on 05 Mar excluded — amount cut off in source)
-    ("2026-03-01T08:00:00+00:00", "KOPIFELLAS",         6.20, "UOB_LADY", "DINING"),
-    ("2026-03-01T10:00:00+00:00", "SHENG SIONG",      103.44, "UOB_LADY", "FAMILY"),
-    ("2026-03-02T10:00:00+00:00", "NTUC FAIRPRICE",     5.44, "UOB_LADY", "FAMILY"),
-    ("2026-03-03T10:00:00+00:00", "NTUC FAIRPRICE",    25.56, "UOB_LADY", "FAMILY"),
-    ("2026-03-04T10:00:00+00:00", "KRISPAY TONGUE TIP",26.20, "UOB_LADY", "DINING"),
-    ("2026-03-04T12:00:00+00:00", "NTUC FAIRPRICE",     3.62, "UOB_LADY", "FAMILY"),
-    ("2026-03-05T10:00:00+00:00", "GOKOKU BAKERY",      8.40, "UOB_LADY", "DINING"),
-    ("2026-03-06T10:00:00+00:00", "BLUE LABEL PIZZA", 107.91, "UOB_LADY", "DINING"),
-    ("2026-03-06T11:00:00+00:00", "KOPITIAM",            7.87, "UOB_LADY", "DINING"),
-    ("2026-03-06T12:00:00+00:00", "GUARDIAN",            8.95, "UOB_LADY", "OTHER"),
-    ("2026-03-06T13:00:00+00:00", "NTUC FAIRPRICE",    21.26, "UOB_LADY", "FAMILY"),
-    ("2026-03-07T09:00:00+00:00", "YA KUN KAYA TOAST", 14.90, "UOB_LADY", "DINING"),
-    ("2026-03-07T12:00:00+00:00", "PASTAGO",            20.00, "UOB_LADY", "DINING"),
-    ("2026-03-07T19:00:00+00:00", "SHOCK BURGER",       12.49, "UOB_LADY", "DINING"),
-    ("2026-03-08T09:00:00+00:00", "NTUC FAIRPRICE",     5.95, "UOB_LADY", "FAMILY"),
-    ("2026-03-08T14:00:00+00:00", "WATSONS",            53.52, "UOB_LADY", "OTHER"),
-    ("2026-03-08T19:00:00+00:00", "TASTE PARADISE",    229.15, "UOB_LADY", "DINING"),
-    ("2026-03-09T09:00:00+00:00", "SHOCK BURGER",       11.90, "UOB_LADY", "DINING"),
-    ("2026-03-09T10:00:00+00:00", "BJB TANJONG PAGAR",  5.90, "UOB_LADY", "DINING"),
-    ("2026-03-09T11:00:00+00:00", "THE HAINAN STORY",   2.40, "UOB_LADY", "DINING"),
-    ("2026-03-09T13:00:00+00:00", "NTUC FAIRPRICE",    13.95, "UOB_LADY", "FAMILY"),
-    ("2026-03-09T19:00:00+00:00", "THE DAILY CUT",      9.45, "UOB_LADY", "DINING"),
+    ("2026-03-01T08:00:00+00:00", "KOPIFELLAS",          6.20, "UOB_LADY", "DINING"),
+    ("2026-03-01T10:00:00+00:00", "SHENG SIONG",        103.44, "UOB_LADY", "FAMILY"),
+    ("2026-03-02T10:00:00+00:00", "NTUC FAIRPRICE",       5.44, "UOB_LADY", "FAMILY"),
+    ("2026-03-03T10:00:00+00:00", "NTUC FAIRPRICE",      25.56, "UOB_LADY", "FAMILY"),
+    ("2026-03-04T10:00:00+00:00", "KRISPAY TONGUE TIP",  26.20, "UOB_LADY", "DINING"),
+    ("2026-03-04T12:00:00+00:00", "NTUC FAIRPRICE",       3.62, "UOB_LADY", "FAMILY"),
+    ("2026-03-05T10:00:00+00:00", "GOKOKU BAKERY",        8.40, "UOB_LADY", "DINING"),
+    ("2026-03-06T10:00:00+00:00", "BLUE LABEL PIZZA",   107.91, "UOB_LADY", "DINING"),
+    ("2026-03-06T11:00:00+00:00", "KOPITIAM",             7.87, "UOB_LADY", "DINING"),
+    ("2026-03-06T12:00:00+00:00", "GUARDIAN",             8.95, "UOB_LADY", "OTHER"),
+    ("2026-03-06T13:00:00+00:00", "NTUC FAIRPRICE",      21.26, "UOB_LADY", "FAMILY"),
+    ("2026-03-07T09:00:00+00:00", "YA KUN KAYA TOAST",   14.90, "UOB_LADY", "DINING"),
+    ("2026-03-07T12:00:00+00:00", "PASTAGO",              20.00, "UOB_LADY", "DINING"),
+    ("2026-03-07T19:00:00+00:00", "SHOCK BURGER",         12.49, "UOB_LADY", "DINING"),
+    ("2026-03-08T09:00:00+00:00", "NTUC FAIRPRICE",       5.95, "UOB_LADY", "FAMILY"),
+    ("2026-03-08T14:00:00+00:00", "WATSONS",              53.52, "UOB_LADY", "OTHER"),
+    ("2026-03-08T19:00:00+00:00", "TASTE PARADISE",      229.15, "UOB_LADY", "DINING"),
+    ("2026-03-09T09:00:00+00:00", "SHOCK BURGER",         11.90, "UOB_LADY", "DINING"),
+    ("2026-03-09T10:00:00+00:00", "BJB TANJONG PAGAR",    5.90, "UOB_LADY", "DINING"),
+    ("2026-03-09T11:00:00+00:00", "THE HAINAN STORY",     2.40, "UOB_LADY", "DINING"),
+    ("2026-03-09T13:00:00+00:00", "NTUC FAIRPRICE",      13.95, "UOB_LADY", "FAMILY"),
+    ("2026-03-09T19:00:00+00:00", "THE DAILY CUT",        9.45, "UOB_LADY", "DINING"),
     ("2026-03-10T12:00:00+00:00", "SMP BUGIS XIN YUAN JI", 13.10, "UOB_LADY", "DINING"),
-    ("2026-03-11T10:00:00+00:00", "BJB TANJONG PAGAR",  5.90, "UOB_LADY", "DINING"),
+    ("2026-03-11T10:00:00+00:00", "BJB TANJONG PAGAR",    5.90, "UOB_LADY", "DINING"),
 
     # ── DBS WWMC ──────────────────────────────────────────────────────────
     # (Shopee charges on 02–03 Mar fully offset by same-day refunds; net $0)
-    ("2026-03-03T12:00:00+00:00", "GRAB",               6.72, "DBS_WWMC", "DINING"),
-    ("2026-03-06T10:00:00+00:00", "AMZNPRIMESG",        4.99, "DBS_WWMC", "OTHER"),
-    ("2026-03-08T11:00:00+00:00", "THE SOUP SPOON",    29.30, "DBS_WWMC", "DINING"),
-    ("2026-03-08T14:00:00+00:00", "GRAB",              26.40, "DBS_WWMC", "TRANSPORT"),
-    ("2026-03-09T10:00:00+00:00", "AXS PTE LTD",      71.60, "DBS_WWMC", "OTHER"),
-    ("2026-03-10T10:00:00+00:00", "ZYM MOBILE",         7.77, "DBS_WWMC", "OTHER"),
-    ("2026-03-12T12:00:00+00:00", "MOSBURGER",          9.10, "DBS_WWMC", "DINING"),
-    ("2026-03-14T09:00:00+00:00", "CLAUDE.AI",         30.00, "DBS_WWMC", "OTHER"),
-    ("2026-03-14T13:00:00+00:00", "MCDONALDS",          8.20, "DBS_WWMC", "DINING"),
+    ("2026-03-03T12:00:00+00:00", "GRAB",                 6.72, "DBS_WWMC", "DINING"),
+    ("2026-03-06T10:00:00+00:00", "AMZNPRIMESG",          4.99, "DBS_WWMC", "OTHER"),
+    ("2026-03-08T11:00:00+00:00", "THE SOUP SPOON",      29.30, "DBS_WWMC", "DINING"),
+    ("2026-03-08T14:00:00+00:00", "GRAB",                26.40, "DBS_WWMC", "TRANSPORT"),
+    ("2026-03-09T10:00:00+00:00", "AXS PTE LTD",         71.60, "DBS_WWMC", "OTHER"),
+    ("2026-03-10T10:00:00+00:00", "ZYM MOBILE",           7.77, "DBS_WWMC", "OTHER"),
+    ("2026-03-12T12:00:00+00:00", "MOSBURGER",            9.10, "DBS_WWMC", "DINING"),
+    ("2026-03-14T09:00:00+00:00", "CLAUDE.AI",           30.00, "DBS_WWMC", "OTHER"),
+    ("2026-03-14T13:00:00+00:00", "MCDONALDS",            8.20, "DBS_WWMC", "DINING"),
 
     # ── CITI Rewards (period started 15 Feb) ──────────────────────────────
-    ("2026-03-10T11:00:00+00:00", "ZYM MOBILE",       15.10, "CITI_REWARDS", "OTHER"),
-    ("2026-03-14T15:00:00+00:00", "AMAZE ALPENGROUP",127.82, "CITI_REWARDS", "OTHER"),
-    
+    ("2026-03-10T11:00:00+00:00", "ZYM MOBILE",          15.10, "CITI_REWARDS", "OTHER"),
+    ("2026-03-14T15:00:00+00:00", "AMAZE ALPENGROUP",   127.82, "CITI_REWARDS", "OTHER"),
 ]
 
 
 def _print_totals():
-    import caps, config
-
+    """Print post-seed spend totals per card to stdout."""
     period_starts = {
         ct: caps.get_period_start(ct, config.CITI_STATEMENT_DATE)
         for ct in ("UOB_LADY", "DBS_WWMC", "CITI_REWARDS")
@@ -89,7 +92,7 @@ def _print_totals():
 
 
 def main():
-    import sqlite3, os
+    """Guard against double-seeding, then insert all SEED rows."""
     if not DRY_RUN:
         conn = sqlite3.connect(os.environ.get("DB_PATH", "transactions.db"))
         count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
@@ -101,7 +104,8 @@ def main():
 
     print(f"{'[DRY RUN] ' if DRY_RUN else ''}Seeding {len(SEED)} transactions...\n")
     for ts, merchant, amount, card_type, category in SEED:
-        print(f"  {'(skip) ' if DRY_RUN else ''}  {merchant:30s}  {card_type:12s}  {category:10s}  SGD {amount:.2f}")
+        row = f"  {'(skip) ' if DRY_RUN else ''}  {merchant:30s}  {card_type:12s}"
+        print(f"{row}  {category:10s}  SGD {amount:.2f}")
         if not DRY_RUN:
             database.insert_transaction(ts, merchant, amount, card_type, category)
 

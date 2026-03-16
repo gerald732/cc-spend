@@ -1,3 +1,5 @@
+"""IMAP polling loop: fetches unseen bank alert emails and processes transactions."""
+
 import imaplib
 import email
 import logging
@@ -12,7 +14,7 @@ import categorizer
 import caps
 import metrics
 import telegram_client
-from parser import BANK_PARSER_CLASSES
+from email_parser import BankParser
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +27,23 @@ _BACKOFF_JITTER = 0.2    # ±20%
 def _build_label_parsers() -> dict[str, list[tuple[str, object]]]:
     label_parsers: dict[str, list] = {}
     for card in config.CARDS:
-        parser_cls = BANK_PARSER_CLASSES.get(card.bank)
-        if parser_cls is None:
+        bank_cfg = config.BANKS.get(card.bank)
+        if bank_cfg is None:
             raise ValueError(
-                f"Unknown bank key {card.bank!r} in CARDS config. "
-                f"Valid keys: {list(BANK_PARSER_CLASSES)}"
+                f"Unknown bank key {card.bank!r} in cards config. "
+                f"Valid keys: {list(config.BANKS)}"
             )
-        parser = parser_cls(card.identifier)
+        parser = BankParser(
+            from_address=bank_cfg.from_address,
+            subject=bank_cfg.subject,
+            merchant_re=bank_cfg.merchant_re,
+            identifier=card.identifier,
+        )
         label_parsers.setdefault(card.label, []).append((card.card_type, parser))
     return label_parsers
 
 
-# Built at startup from CARDS env var — no code change needed to add a new card.
+# Built at startup from cards.yml — no code change needed to add a card from an existing bank.
 _LABEL_PARSERS: dict[str, list[tuple[str, object]]] = _build_label_parsers()
 
 # card_type → online_bypass flag, for fast lookup in _process_message
@@ -74,7 +81,7 @@ class _HTMLTextExtractor(HTMLParser):
         self._lines: list[str] = []
         self._skip = False
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag, attrs):  # pylint: disable=unused-argument
         if tag in ("style", "script"):
             self._skip = True
 
@@ -89,10 +96,12 @@ class _HTMLTextExtractor(HTMLParser):
                 self._lines.append(stripped)
 
     def get_text(self) -> str:
+        """Return the accumulated visible text lines joined by newlines."""
         return "\n".join(self._lines)
 
 
 def _html_to_text(html: str) -> str:
+    """Strip HTML tags from an email body and return plain text."""
     extractor = _HTMLTextExtractor()
     extractor.feed(html)
     return extractor.get_text()
@@ -176,7 +185,7 @@ def poll_once() -> bool:
                 for card_type, parser in parsers:
                     # Match by sender to route to the right parser
                     sender_header = _get_sender(conn, uid)
-                    if parser.FROM.lower() in sender_header:
+                    if parser.from_address.lower() in sender_header:
                         _process_message(uid, body, card_type, parser, conn)
                         break
     finally:
@@ -185,6 +194,7 @@ def poll_once() -> bool:
 
 
 def run_loop():
+    """Poll all Gmail labels on a fixed interval with exponential backoff on IMAP failure."""
     logger.info("Starting poll loop every %ds", config.POLL_INTERVAL_SECONDS)
     backoff = _BACKOFF_BASE
     while True:

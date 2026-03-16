@@ -29,6 +29,7 @@ import time
 from rapidfuzz import process
 import anthropic
 import config
+import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -139,14 +140,14 @@ _CLAUDE_RETRY_DELAYS = [1, 2]  # seconds between attempts
 
 _VALID_CATEGORIES = {"FAMILY", "DINING", "OTHER"}
 
-_anthropic_client: "anthropic.Anthropic | None" = None
+_client_cache: list = []  # holds at most one element: the shared Anthropic client
 
 
 def _get_client() -> "anthropic.Anthropic":
-    global _anthropic_client
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    return _anthropic_client
+    """Return the shared Anthropic client, initialising it on first call."""
+    if not _client_cache:
+        _client_cache.append(anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY))
+    return _client_cache[0]
 
 
 _SYSTEM_PROMPT = (
@@ -157,6 +158,7 @@ _SYSTEM_PROMPT = (
 
 
 def categorize(merchant: str) -> str:
+    """Fuzzy-match merchant name against known MCC mappings; return category or 'OTHER'."""
     name = merchant.upper()
     result = process.extractOne(name, MERCHANT_MCC.keys(), score_cutoff=_THRESHOLD)
     if result:
@@ -200,7 +202,6 @@ def categorize_with_claude_fallback(merchant: str) -> str:
                 )
                 time.sleep(delay)
             else:
-                import metrics  # late import to avoid circular dependency at module load
                 logger.exception("Claude fallback exhausted for merchant '%s'", merchant)
                 metrics.claude_failures.inc()
 

@@ -15,6 +15,10 @@ import logging
 from prometheus_client import Counter, Gauge
 from prometheus_client.exposition import MetricsHandler
 
+import caps
+import config
+import database
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -49,11 +53,7 @@ up_gauge = Gauge(
 # ---------------------------------------------------------------------------
 
 def _build_status() -> dict:
-    # Late imports to avoid circular dependency at module load time.
-    import caps
-    import config
-    import database
-
+    """Query the DB and return current period spend vs caps for all cards."""
     result = {}
     for card_type in ("UOB_LADY", "DBS_WWMC", "CITI_REWARDS"):
         period_start = caps.get_period_start(card_type, config.CITI_STATEMENT_DATE)
@@ -83,7 +83,10 @@ def _build_status() -> dict:
 
 
 class _Handler(MetricsHandler):
+    """HTTP handler serving /healthz, /status, and the Prometheus /metrics endpoint."""
+
     def do_GET(self):
+        """Route GET requests to the appropriate handler."""
         if self.path == "/healthz":
             self.send_response(200)
             self.end_headers()
@@ -103,11 +106,12 @@ class _Handler(MetricsHandler):
         else:
             super().do_GET()
 
-    def log_message(self, fmt, *args):  # silence per-request access logs
+    def log_message(self, *args):  # silence per-request access logs
         pass
 
 
 def start_metrics_server(port: int) -> None:
+    """Start the HTTP metrics/health server on a daemon thread."""
     server = HTTPServer(("", port), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

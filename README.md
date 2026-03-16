@@ -9,8 +9,8 @@ Monitors Singapore credit card transaction alert emails via IMAP and sends per-t
 python3 -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Install dependencies (includes dev tools: pylint, flake8, pytest)
+pip install -r requirements-dev.txt
 
 # 3. Copy the example configs and fill in your values (see Setup below)
 cp .env.example .env
@@ -90,7 +90,9 @@ Each entry in `cards.yml` has an `online_bypass` flag. Cards with `online_bypass
 ### Install dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # local dev (includes pylint, flake8, pytest)
+# or
+pip install -r requirements.txt       # prod only
 ```
 
 ### Configure `.env`

@@ -1,9 +1,35 @@
+banks:
+  # Each entry defines how to parse alert emails from one bank.
+  # These values are shared across all cards from the same bank — do not repeat
+  # them per card.
+  #
+  # Fields:
+  #   from_address  - sender address used to route emails to this bank's parser
+  #   subject       - expected email subject (informational; not currently filtered)
+  #   merchant_re   - regex with one capture group that extracts the merchant name
+  #                   from the email body (compiled with re.IGNORECASE)
+
+  CITI:
+    from_address: alerts@citibank.com.sg
+    subject: 'Citi Alerts - Credit Card/Ready Credit Transaction'
+    merchant_re: 'Transaction\s+details\s*:\s*(.*)'
+
+  DBS:
+    from_address: ibanking.alert@dbs.com
+    subject: 'Card Transaction Alert'
+    merchant_re: 'To:\s*(.*)'
+
+  UOB:
+    from_address: unialerts@uobgroup.com
+    subject: 'UOB - Transaction Alert'
+    merchant_re: 'at\s+(.*?)\.\s+If\s+unauthorised,'
+
 cards:
   # Each entry defines one tracked credit card.
   #
   # Fields:
-  #   bank          - CITI, DBS, or UOB (determines which email parser is used)
-  #   gmail_label   - the Gmail label suffix after [Gmail]/Labels/
+  #   bank          - must match a key in the `banks` block above
+  #   label         - full IMAP label path for this card's alert emails
   #   identifier    - substring that must appear in the alert email body to confirm
   #                   the right card. Use last 4 digits for UOB/DBS, card product
   #                   name for Citi. Omit (or leave blank) to accept all emails from
@@ -13,19 +39,19 @@ cards:
   #                   false: categorise via MCC lookup / Claude fallback
 
   - bank: CITI
-    gmail_label: Citibank
+    label: "[Gmail]/Labels/Citibank"
     identifier: "Citi Rewards"
     card_type: CITI_REWARDS
     online_bypass: true
 
   - bank: DBS
-    gmail_label: iBank
+    label: "[Gmail]/Labels/iBank"
     identifier: "1798"
     card_type: DBS_WWMC
     online_bypass: true
 
   - bank: UOB
-    gmail_label: iBank
+    label: "[Gmail]/Labels/iBank"
     identifier: "8631"
     card_type: UOB_LADY
     online_bypass: false

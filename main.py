@@ -1,3 +1,5 @@
+"""Entry point: starts the metrics server, summary loop, and IMAP polling loop."""
+
 import logging
 import signal
 import sys
@@ -16,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _handle_sigterm(signum, frame):
+def _handle_sigterm(_signum, _frame):
     logger.info("Received SIGTERM, shutting down.")
     sys.exit(0)
 
