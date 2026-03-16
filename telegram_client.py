@@ -140,10 +140,16 @@ def send_summary() -> None:
 
 
 def run_summary_loop() -> None:
-    """Send a summary every SUMMARY_INTERVAL_SECONDS. Run as a daemon thread."""
+    """Send a summary every SUMMARY_INTERVAL_SECONDS, skipping if no new transactions."""
+    last_count = database.get_transaction_count()
     while True:
         time.sleep(config.SUMMARY_INTERVAL_SECONDS)
         try:
+            current_count = database.get_transaction_count()
+            if current_count == last_count:
+                logger.info("No new transactions since last summary — skipping")
+                continue
+            last_count = current_count
             send_summary()
         except Exception:
             logger.exception("Summary send failed")

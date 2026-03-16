@@ -54,6 +54,12 @@ def get_monthly_category_total(card_type: str, category: str, period_start: date
     return row[0]
 
 
+def get_transaction_count() -> int:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()
+    return row[0]
+
+
 def get_all_monthly(period_start: datetime) -> list[sqlite3.Row]:
     with _connect() as conn:
         rows = conn.execute(

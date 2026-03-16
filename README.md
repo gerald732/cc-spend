@@ -66,15 +66,15 @@ curl http://localhost:9090/status
 
 ## Supported cards
 
-Cards are configured entirely via the `CARDS` env var — no code changes needed to add a new card.
+Cards are configured via `cards.yml`. Adding a new card from an existing bank (CITI, DBS, or UOB) requires only a `cards.yml` entry — no code changes. Adding support for an entirely new bank requires adding a parser class to `parser.py` (the sender address and email format are hardcoded per bank).
 
-| Bank key | Sender address             | Notes                        |
-|----------|----------------------------|------------------------------|
-| `CITI`   | alerts@citibank.com.sg     | Any Citi card                |
-| `DBS`    | ibanking.alert@dbs.com     | Any DBS card                 |
-| `UOB`    | unialerts@uobgroup.com     | Any UOB card                 |
+| Bank key | Sender address         |
+|----------|------------------------|
+| `CITI`   | alerts@citibank.com.sg |
+| `DBS`    | ibanking.alert@dbs.com |
+| `UOB`    | unialerts@uobgroup.com |
 
-Each card entry in `CARDS` sets its own `ONLINE_BYPASS` flag. Cards with `true` skip merchant categorisation and are recorded as `ONLINE`.
+Each entry in `cards.yml` has an `online_bypass` flag. Cards with `online_bypass: true` skip merchant categorisation and are recorded as `ONLINE`.
 
 ## Setup
 
