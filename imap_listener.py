@@ -151,7 +151,7 @@ def _process_message(uid: bytes, body: str, card_type: str, parser, conn: imapli
     if _ONLINE_BYPASS.get(card_type, False):
         category = "ONLINE"
     else:
-        category = categorizer.categorize_with_claude_fallback(merchant)
+        category = categorizer.categorize_with_llm_fallback(merchant)
     final_category = caps.apply_cap(card_type, category, config.CITI_STATEMENT_DATE)
 
     timestamp = datetime.now(timezone.utc).isoformat()

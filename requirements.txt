@@ -2,4 +2,5 @@ python-dotenv
 pyyaml
 rapidfuzz
 anthropic
+google-genai
 prometheus_client

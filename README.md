@@ -23,13 +23,15 @@ python -m pytest test_cc_spend.py -v
 python main.py
 ```
 
-Three endpoints are available on `METRICS_PORT` (default 9090) once the service is running:
+Four endpoints are available on `METRICS_PORT` (default 9090) once the service is running:
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /healthz` | Returns `200 OK` while the process is alive — used by Docker health checks and uptime monitors |
 | `GET /metrics` | Prometheus scrape endpoint |
 | `GET /status` | JSON spend summary — current period totals vs caps for all cards |
+| `GET /categories` | Browser UI — view and override the merchant→category cache |
+| `POST /categories` | Submit a category override from the `/categories` form |
 
 To verify the service is running and the DB is populated correctly (e.g. after seeding):
 ```bash
@@ -59,10 +61,11 @@ curl http://localhost:9090/status
 
 1. Polls Gmail (IMAP) on a configurable interval for unseen transaction alert emails
 2. Parses merchant name and amount from configured bank alert emails
-3. Categorizes merchants (FAMILY, DINING, TRANSPORT, etc.) using fuzzy matching; falls back to Claude API for unknowns
-4. Tracks per-card spending caps and marks transactions as `EXCEEDED` when the cap is hit
-5. Stores every transaction in a SQLite database
-6. Sends per-transaction alerts and 6-hourly summaries to a Telegram bot
+3. Categorizes merchants (FAMILY, DINING, TRANSPORT, etc.) using fuzzy matching against a known list; for unknowns, checks the merchant cache in SQLite, then falls back to Gemini API (if `GEMINI_API_KEY` is set) or Claude API (if `ANTHROPIC_API_KEY` is set)
+4. Claude results and manual overrides are stored in a `merchant_categories` table so repeated transactions from the same merchant never re-query the API
+5. Tracks per-card spending caps and marks transactions as `EXCEEDED` when the cap is hit
+6. Stores every transaction in a SQLite database
+7. Sends per-transaction alerts and 6-hourly (configurable) summaries to a Telegram bot
 
 ## Supported cards
 
@@ -119,8 +122,11 @@ POLL_INTERVAL_SECONDS=10800
 # SQLite database path (override in Docker to point at the mounted volume)
 DB_PATH=/data/transactions.db
 
-# Optional: Anthropic API key for Claude-powered merchant categorization fallback.
-# If unset, unknown merchants are recorded as OTHER without calling the API.
+# LLM fallback for merchant categorization.
+# Gemini 2.5 Flash Lite takes precedence when GEMINI_API_KEY is set.
+# Claude (paid, separate from Claude.ai Pro) is used if only ANTHROPIC_API_KEY is set.
+# If neither is set, unknown merchants are recorded as OTHER.
+GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
 
 # Prometheus metrics + healthcheck port (default: 9090)
@@ -211,7 +217,7 @@ python -m pytest test_cc_spend.py -v
 python -m unittest test_cc_spend -v
 ```
 
-Tests cover: email parsers (Citi/DBS/UOB), merchant categorizer, Claude fallback, cap logic, and database queries.
+Tests cover: email parsers (Citi/DBS/UOB), merchant categorizer, Gemini and Claude LLM fallbacks, cap logic, and database queries.
 
 ## Telegram notifications
 
@@ -264,6 +270,12 @@ cards:
 
 ## Adding a new merchant
 
+**Option 1 — Browser UI (recommended for one-off corrections):**
+
+Open `http://localhost:9090/categories` in a browser. Use the "Add / Override" form at the bottom to map any merchant name to the correct category. Manual overrides take precedence over Claude on future transactions.
+
+**Option 2 — Code (for well-known merchants you want matched without any API call):**
+
 Edit `MERCHANT_MCC` in `categorizer.py`, mapping the merchant name (uppercase) to its MCC code:
 
 ```python
@@ -271,8 +283,17 @@ Edit `MERCHANT_MCC` in `categorizer.py`, mapping the merchant name (uppercase) t
 "ANOTHER SHOP": 5641,  # Family (children's wear)
 ```
 
-If no MCC mapping exists for a merchant, the Claude fallback classifies it into `FAMILY`, `DINING`, or `OTHER` (requires `ANTHROPIC_API_KEY`).
+If no MCC mapping or cache entry exists for a merchant, an LLM classifies it into `FAMILY`, `DINING`, or `OTHER`. Gemini is tried first (`gemini-2.5-flash-lite`); Claude is used as a secondary fallback. The result is stored in the cache so the API is only called once per new merchant.
 
-## Parse errors
+> **Note:** `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` are independent of Claude.ai Pro subscriptions — they are separate API products. If neither key is configured, unknown merchants fall back to `OTHER`. Failures are counted in the `cc_spend_claude_failures_total` metric.
 
-Failed parses are logged to `parse_errors.log` with the raw email body for debugging.
+## Logging
+
+All log output goes to stdout at `INFO` level with UTC timestamps. Each module uses its own named logger so you can filter by source (e.g. `categorizer`, `imap_listener`).
+
+Key log events:
+- `categorizer` — merchant name sent to Gemini/Claude, raw API response, cache hits, and fallback-to-OTHER with reason
+- `imap_listener` — poll start/end, IMAP failures, and per-transaction processing
+- `metrics` — manual category overrides submitted via `/categories`
+
+Failed email parses are also written to `parse_errors.log` with the raw email body for debugging.

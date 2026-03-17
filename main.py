@@ -4,6 +4,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 
 import config
 import database
@@ -15,6 +16,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+logging.Formatter.converter = time.gmtime  # all timestamps in UTC
 logger = logging.getLogger(__name__)
 
 

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Merchant Categories</title>
+  <style>
+    body { font-family: monospace; padding: 1em; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+    th { background: #f0f0f0; }
+    .add-form { margin-top: 1.5em; padding: 1em; border: 1px solid #ccc; display: inline-block; }
+  </style>
+</head>
+<body>
+  <h2>Merchant Categories</h2>
+  <table>
+    <tr><th>Merchant</th><th>Source</th><th>Updated (UTC)</th><th>Category</th></tr>
+    {{TABLE_ROWS}}
+  </table>
+  <div class="add-form">
+    <strong>Add / Override</strong><br><br>
+    <form method="post" action="/categories">
+      Merchant: <input type="text" name="merchant" size="30">
+      Category: <select name="category">{{OPTION_TAGS}}</select>
+      <button type="submit">Save</button>
+    </form>
+  </div>
+</body>
+</html>

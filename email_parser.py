@@ -2,9 +2,17 @@
 
 import re
 import logging
+import time
 
-logging.basicConfig(filename="parse_errors.log", level=logging.ERROR,
-                    format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+# Dedicated file handler for parse errors — does not interfere with root logger
+_parse_error_handler = logging.FileHandler("parse_errors.log")
+_parse_error_handler.setLevel(logging.ERROR)
+_parse_err_fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+_parse_err_fmt.converter = time.gmtime  # UTC
+_parse_error_handler.setFormatter(_parse_err_fmt)
+logger.addHandler(_parse_error_handler)
 
 _AMOUNT_RE = re.compile(r"SGD\s*([\d,]+\.\d{2})")
 
@@ -12,7 +20,7 @@ _AMOUNT_RE = re.compile(r"SGD\s*([\d,]+\.\d{2})")
 def _check_card_identifier(identifier: str | None, body: str, label: str) -> bool:
     """Return False (and log) if identifier is set but not found in body."""
     if identifier and identifier.lower() not in body.lower():
-        logging.error(
+        logger.error(
             "%s: card identifier '%s' not found in email — skipping\n---\n%s\n---",
             label, identifier, body,
         )
@@ -48,6 +56,6 @@ class BankParser:
         m = self._merchant_re.search(body)
         amount = _parse_amount(body)
         if not m or amount is None:
-            logging.error("BankParser(%s) failed\n---\n%s\n---", self.from_address, body)
+            logger.error("BankParser(%s) failed\n---\n%s\n---", self.from_address, body)
             return None
         return m.group(1).strip(), amount

@@ -1,5 +1,14 @@
 Before implementing anything, list ONLY what I'm asking for in bullet points and confirm with me. Do not generalize or add features I haven't requested.
 
+## Session Start
+- **Always read `.claude/tasks/lessons.md` at the start of every session** before taking any action.
+
+## Definition of Done
+- Every task is only complete when:
+  1. `make lint flake8` passes with no violations
+  2. `make test` passes
+  3. `README.md` is updated if any user-facing behaviour, endpoint, or config changed
+
 ## File Conventions
 - Always write task files, plans, and notes to `.claude/tasks/` directory, never to the project root.
 

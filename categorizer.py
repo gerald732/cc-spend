@@ -25,10 +25,14 @@ MCC references:
 """
 
 import logging
+import re
 import time
 from rapidfuzz import process
 import anthropic
+from google import genai
+from google.genai import types as genai_types, errors as genai_errors
 import config
+import database
 import metrics
 
 logger = logging.getLogger(__name__)
@@ -135,26 +139,46 @@ MERCHANT_MCC: dict[str, int] = {
 }
 
 _THRESHOLD = 80
-_CLAUDE_RETRIES = 2
-_CLAUDE_RETRY_DELAYS = [1, 2]  # seconds between attempts
+_LLM_RETRIES = 2
+_LLM_RETRY_DELAYS = [1, 2]  # seconds between attempts
 
 _VALID_CATEGORIES = {"FAMILY", "DINING", "OTHER"}
 
-_client_cache: list = []  # holds at most one element: the shared Anthropic client
+_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+_GEMINI_MODEL = "gemini-2.5-flash-lite"
 
-
-def _get_client() -> "anthropic.Anthropic":
-    """Return the shared Anthropic client, initialising it on first call."""
-    if not _client_cache:
-        _client_cache.append(anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY))
-    return _client_cache[0]
-
+_claude_cache: list = []   # holds at most one Anthropic client
+_gemini_cache: list = []   # holds at most one GenerativeModel
 
 _SYSTEM_PROMPT = (
     "You are a merchant category classifier for Singapore credit cards. "
     "Given a merchant name, respond with exactly one word: "
     "FAMILY, DINING, or OTHER. No explanation."
 )
+
+_CORP_SUFFIX_RE = re.compile(
+    r"\b(PTE\.?\s*LTD\.?|SDN\s*BHD|LLP|PLC|INC\.?|LTD\.?|CORP\.?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_corp_suffix(merchant: str) -> str:
+    """Remove common corporate suffixes before sending to an LLM."""
+    return _CORP_SUFFIX_RE.sub("", merchant).strip()
+
+
+def _get_claude_client() -> "anthropic.Anthropic":
+    """Return the shared Anthropic client, initialising it on first call."""
+    if not _claude_cache:
+        _claude_cache.append(anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY))
+    return _claude_cache[0]
+
+
+def _get_gemini_client() -> "genai.Client":
+    """Return the shared Gemini Client, initialising it on first call."""
+    if not _gemini_cache:
+        _gemini_cache.append(genai.Client(api_key=config.GEMINI_API_KEY))
+    return _gemini_cache[0]
 
 
 def categorize(merchant: str) -> str:
@@ -167,42 +191,125 @@ def categorize(merchant: str) -> str:
     return "OTHER"
 
 
-def categorize_with_claude_fallback(merchant: str) -> str:
-    """Fuzzy-match first; call Claude only when the result is OTHER."""
+def _classify_with_claude(merchant: str) -> str:
+    """Call Claude API to classify merchant; returns a valid category or 'OTHER'."""
+    query = _strip_corp_suffix(merchant)
+    logger.info("Calling Claude for merchant '%s' (query: '%s')", merchant, query)
+    client = _get_claude_client()
+    word = None
+    for attempt in range(_LLM_RETRIES + 1):
+        try:
+            response = client.messages.create(
+                model=_CLAUDE_MODEL,
+                max_tokens=10,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": query}],
+            )
+            raw = response.content[0].text.strip()
+            word = raw.upper()
+            logger.info("Claude raw response for '%s': %r → parsed as %s", merchant, raw, word)
+            if word not in _VALID_CATEGORIES:
+                logger.warning(
+                    "Claude returned unexpected value %r for '%s'; defaulting to OTHER",
+                    raw, merchant,
+                )
+                return "OTHER"
+            break
+        except anthropic.BadRequestError as exc:
+            logger.error("Claude non-retryable error for '%s': %s", merchant, exc)
+            metrics.claude_failures.inc()
+            return "OTHER"
+        except Exception:
+            if attempt < _LLM_RETRIES:
+                delay = _LLM_RETRY_DELAYS[attempt]
+                logger.warning(
+                    "Claude attempt %d/%d failed for '%s'; retrying in %ds",
+                    attempt + 1, _LLM_RETRIES + 1, merchant, delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.exception("Claude exhausted retries for merchant '%s'", merchant)
+                metrics.claude_failures.inc()
+                return "OTHER"
+    if word:
+        database.upsert_merchant_category(merchant, word, "claude")
+    return word or "OTHER"
+
+
+def _classify_with_gemini(merchant: str) -> str:
+    """Call Gemini API to classify merchant; returns a valid category or 'OTHER'."""
+    query = _strip_corp_suffix(merchant)
+    logger.info("Calling Gemini for merchant '%s' (query: '%s')", merchant, query)
+    client = _get_gemini_client()
+    word = None
+    for attempt in range(_LLM_RETRIES + 1):
+        try:
+            response = client.models.generate_content(
+                model=_GEMINI_MODEL,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    max_output_tokens=10,
+                ),
+                contents=query,
+            )
+            raw = response.text.strip()
+            word = raw.upper()
+            logger.info("Gemini raw response for '%s': %r → parsed as %s", merchant, raw, word)
+            if word not in _VALID_CATEGORIES:
+                logger.warning(
+                    "Gemini returned unexpected value %r for '%s'; defaulting to OTHER",
+                    raw, merchant,
+                )
+                return "OTHER"
+            break
+        except genai_errors.ClientError as exc:
+            if exc.code != 429:
+                logger.error("Gemini non-retryable error for '%s': %s", merchant, exc)
+                metrics.claude_failures.inc()
+                return "OTHER"
+            if attempt < _LLM_RETRIES:
+                delay = _LLM_RETRY_DELAYS[attempt]
+                logger.warning(
+                    "Gemini attempt %d/%d failed for '%s'; retrying in %ds",
+                    attempt + 1, _LLM_RETRIES + 1, merchant, delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.exception("Gemini exhausted retries for merchant '%s'", merchant)
+                metrics.claude_failures.inc()
+                return "OTHER"
+        except Exception:
+            if attempt < _LLM_RETRIES:
+                delay = _LLM_RETRY_DELAYS[attempt]
+                logger.warning(
+                    "Gemini attempt %d/%d failed for '%s'; retrying in %ds",
+                    attempt + 1, _LLM_RETRIES + 1, merchant, delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.exception("Gemini exhausted retries for merchant '%s'", merchant)
+                metrics.claude_failures.inc()
+                return "OTHER"
+    if word:
+        database.upsert_merchant_category(merchant, word, "gemini")
+    return word or "OTHER"
+
+
+def categorize_with_llm_fallback(merchant: str) -> str:
+    """Fuzzy-match first; check cache; call Gemini or Claude for unknowns."""
     category = categorize(merchant)
     if category != "OTHER":
         return category
 
-    if not config.ANTHROPIC_API_KEY:
-        logger.warning("No ANTHROPIC_API_KEY set; cannot classify '%s' via Claude", merchant)
-        return "OTHER"
+    cached = database.get_merchant_category(merchant)
+    if cached is not None:
+        logger.info("Cache hit: '%s' → %s", merchant, cached)
+        return cached
 
-    client = _get_client()
-    for attempt in range(_CLAUDE_RETRIES + 1):
-        try:
-            response = client.messages.create(
-                model="claude-opus-4-6",
-                max_tokens=10,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": merchant}],
-            )
-            word = response.content[0].text.strip().upper()
-            if word in _VALID_CATEGORIES:
-                logger.info("Claude classified '%s' → %s", merchant, word)
-                return word
-            # Bad response is not retryable
-            logger.warning("Claude returned unexpected category '%s' for '%s'", word, merchant)
-            return "OTHER"
-        except Exception:
-            if attempt < _CLAUDE_RETRIES:
-                delay = _CLAUDE_RETRY_DELAYS[attempt]
-                logger.warning(
-                    "Claude fallback attempt %d/%d failed for '%s'; retrying in %ds",
-                    attempt + 1, _CLAUDE_RETRIES + 1, merchant, delay,
-                )
-                time.sleep(delay)
-            else:
-                logger.exception("Claude fallback exhausted for merchant '%s'", merchant)
-                metrics.claude_failures.inc()
+    if config.GEMINI_API_KEY:
+        return _classify_with_gemini(merchant)
+    if config.ANTHROPIC_API_KEY:
+        return _classify_with_claude(merchant)
 
+    logger.warning("No LLM API key configured; cannot classify '%s'", merchant)
     return "OTHER"

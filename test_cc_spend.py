@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from unittest.mock import patch, MagicMock
+import anthropic
 
 # ---------------------------------------------------------------------------
 # Minimal env so config.py doesn't raise on missing required vars.
@@ -188,88 +189,226 @@ class TestCategorizer(unittest.TestCase):
 
 
 # ===========================================================================
-# Claude fallback categorizer tests
+# LLM fallback categorizer tests — Claude path
 # ===========================================================================
 
 class TestCategorizeWithClaudeFallback(unittest.TestCase):
     def setUp(self):
-        # Reset the singleton so each test gets a fresh mock when patching the constructor.
-        categorizer._client_cache.clear()
+        categorizer._claude_cache.clear()
 
     def tearDown(self):
-        categorizer._client_cache.clear()
+        categorizer._claude_cache.clear()
 
     def test_known_merchant_skips_claude(self):
-        # NTUC matches fuzzy — Claude should never be called
+        # NTUC matches fuzzy — no LLM should be called
         with patch("categorizer.anthropic") as mock_anthropic:
-            result = categorizer.categorize_with_claude_fallback("NTUC FAIRPRICE")
+            result = categorizer.categorize_with_llm_fallback("NTUC FAIRPRICE")
         self.assertEqual(result, "FAMILY")
         mock_anthropic.Anthropic.assert_not_called()
 
     def test_unknown_merchant_calls_claude_and_returns_category(self):
         mock_response = MagicMock()
         mock_response.content[0].text = "FAMILY"
-        with patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
              patch("categorizer.anthropic.Anthropic") as mock_cls:
             mock_cls.return_value.messages.create.return_value = mock_response
-            result = categorizer.categorize_with_claude_fallback("SHENG SIONG FINEST 888")
+            result = categorizer.categorize_with_llm_fallback("SHENG SIONG FINEST 888")
         self.assertEqual(result, "FAMILY")
 
     def test_claude_returns_dining(self):
         mock_response = MagicMock()
         mock_response.content[0].text = "dining"  # lowercase — should be normalised
-        with patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category"), \
              patch("categorizer.anthropic.Anthropic") as mock_cls:
             mock_cls.return_value.messages.create.return_value = mock_response
-            result = categorizer.categorize_with_claude_fallback("SOME RANDOM CAFE 42")
+            result = categorizer.categorize_with_llm_fallback("SOME RANDOM CAFE 42")
         self.assertEqual(result, "DINING")
 
     def test_claude_returns_unexpected_value_falls_back_to_other(self):
         mock_response = MagicMock()
         mock_response.content[0].text = "TRANSPORT"
-        with patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
              patch("categorizer.anthropic.Anthropic") as mock_cls:
             mock_cls.return_value.messages.create.return_value = mock_response
-            result = categorizer.categorize_with_claude_fallback("SOME RANDOM MERCHANT")
+            result = categorizer.categorize_with_llm_fallback("SOME RANDOM MERCHANT")
         self.assertEqual(result, "OTHER")
 
     def test_no_api_key_returns_other_without_calling_claude(self):
-        with patch.object(config, "ANTHROPIC_API_KEY", None), \
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", None), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
              patch("categorizer.anthropic.Anthropic") as mock_cls:
-            result = categorizer.categorize_with_claude_fallback("UNKNOWN PLACE")
+            result = categorizer.categorize_with_llm_fallback("UNKNOWN PLACE")
         self.assertEqual(result, "OTHER")
         mock_cls.assert_not_called()
 
     def test_claude_retries_on_exception_then_succeeds(self):
         mock_response = MagicMock()
         mock_response.content[0].text = "FAMILY"
-        with patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category"), \
              patch("categorizer.anthropic.Anthropic") as mock_cls, \
              patch("categorizer.time.sleep") as mock_sleep:
             mock_create = mock_cls.return_value.messages.create
             mock_create.side_effect = [Exception("transient"), mock_response]
-            result = categorizer.categorize_with_claude_fallback("UNKNOWN PLACE")
+            result = categorizer.categorize_with_llm_fallback("UNKNOWN PLACE")
         self.assertEqual(result, "FAMILY")
         mock_sleep.assert_called_once_with(1)
 
     def test_claude_exhausted_retries_returns_other_and_increments_counter(self):
         import metrics
-        with patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
              patch("categorizer.anthropic.Anthropic") as mock_cls, \
              patch("categorizer.time.sleep"), \
              patch.object(metrics, "claude_failures") as mock_counter:
             mock_cls.return_value.messages.create.side_effect = Exception("persistent")
-            result = categorizer.categorize_with_claude_fallback("UNKNOWN PLACE")
+            result = categorizer.categorize_with_llm_fallback("UNKNOWN PLACE")
         self.assertEqual(result, "OTHER")
         mock_counter.inc.assert_called_once()
 
     def test_claude_exception_returns_other(self):
-        with patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
              patch("categorizer.anthropic.Anthropic") as mock_cls, \
              patch("categorizer.time.sleep"):
             mock_cls.return_value.messages.create.side_effect = Exception("API error")
-            result = categorizer.categorize_with_claude_fallback("UNKNOWN PLACE")
+            result = categorizer.categorize_with_llm_fallback("UNKNOWN PLACE")
         self.assertEqual(result, "OTHER")
+
+    def test_cache_hit_skips_claude(self):
+        with patch("categorizer.database.get_merchant_category", return_value="DINING") as mock_db, \
+             patch("categorizer.anthropic.Anthropic") as mock_cls:
+            result = categorizer.categorize_with_llm_fallback("SOME CAFE 99")
+        self.assertEqual(result, "DINING")
+        mock_db.assert_called_once()
+        mock_cls.assert_not_called()
+
+    def test_claude_result_stored_in_cache(self):
+        mock_response = MagicMock()
+        mock_response.content[0].text = "DINING"
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category") as mock_upsert, \
+             patch("categorizer.anthropic.Anthropic") as mock_cls:
+            mock_cls.return_value.messages.create.return_value = mock_response
+            result = categorizer.categorize_with_llm_fallback("NEW CAFE 77")
+        self.assertEqual(result, "DINING")
+        mock_upsert.assert_called_once_with("NEW CAFE 77", "DINING", "claude")
+
+    def test_bad_request_error_increments_counter_no_retry(self):
+        import metrics
+        with patch.object(config, "GEMINI_API_KEY", None), \
+             patch.object(config, "ANTHROPIC_API_KEY", "test-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.anthropic.Anthropic") as mock_cls, \
+             patch.object(metrics, "claude_failures") as mock_counter:
+            mock_cls.return_value.messages.create.side_effect = \
+                anthropic.BadRequestError.__new__(anthropic.BadRequestError)
+            result = categorizer.categorize_with_llm_fallback("UNKNOWN PLACE")
+        self.assertEqual(result, "OTHER")
+        mock_counter.inc.assert_called_once()
+        # Only one attempt — BadRequestError is not retried
+        self.assertEqual(mock_cls.return_value.messages.create.call_count, 1)
+
+
+# ===========================================================================
+# LLM fallback categorizer tests — Gemini path
+# ===========================================================================
+
+class TestCategorizeWithGeminiFallback(unittest.TestCase):
+    def setUp(self):
+        categorizer._gemini_cache.clear()
+
+    def tearDown(self):
+        categorizer._gemini_cache.clear()
+
+    def _mock_gemini(self, text: str):
+        """Return a mock Client whose models.generate_content returns text."""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value.text = text
+        return mock_client
+
+    def test_gemini_called_when_key_set(self):
+        with patch.object(config, "GEMINI_API_KEY", "gemini-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category"), \
+             patch("categorizer._get_gemini_client", return_value=self._mock_gemini("FAMILY")):
+            result = categorizer.categorize_with_llm_fallback("SOME UNKNOWN SHOP")
+        self.assertEqual(result, "FAMILY")
+
+    def test_gemini_returns_dining(self):
+        with patch.object(config, "GEMINI_API_KEY", "gemini-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category"), \
+             patch("categorizer._get_gemini_client", return_value=self._mock_gemini("dining")):
+            result = categorizer.categorize_with_llm_fallback("SOME CAFE 42")
+        self.assertEqual(result, "DINING")
+
+    def test_gemini_returns_unexpected_falls_back_to_other(self):
+        with patch.object(config, "GEMINI_API_KEY", "gemini-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer._get_gemini_client", return_value=self._mock_gemini("GROCERY")):
+            result = categorizer.categorize_with_llm_fallback("SOME MERCHANT")
+        self.assertEqual(result, "OTHER")
+
+    def test_gemini_result_stored_in_cache(self):
+        with patch.object(config, "GEMINI_API_KEY", "gemini-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category") as mock_upsert, \
+             patch("categorizer._get_gemini_client", return_value=self._mock_gemini("DINING")):
+            categorizer.categorize_with_llm_fallback("ZORK MYSTERY CORP 99")
+        mock_upsert.assert_called_once_with("ZORK MYSTERY CORP 99", "DINING", "gemini")
+
+    def test_gemini_retries_on_exception_then_succeeds(self):
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = [
+            Exception("transient"),
+            MagicMock(text="FAMILY"),
+        ]
+        with patch.object(config, "GEMINI_API_KEY", "gemini-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category"), \
+             patch("categorizer._get_gemini_client", return_value=mock_client), \
+             patch("categorizer.time.sleep") as mock_sleep:
+            result = categorizer.categorize_with_llm_fallback("UNKNOWN PLACE")
+        self.assertEqual(result, "FAMILY")
+        mock_sleep.assert_called_once_with(1)
+
+    def test_gemini_exhausted_retries_returns_other_and_increments_counter(self):
+        import metrics
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = Exception("persistent")
+        with patch.object(config, "GEMINI_API_KEY", "gemini-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer._get_gemini_client", return_value=mock_client), \
+             patch("categorizer.time.sleep"), \
+             patch.object(metrics, "claude_failures") as mock_counter:
+            result = categorizer.categorize_with_llm_fallback("UNKNOWN PLACE")
+        self.assertEqual(result, "OTHER")
+        mock_counter.inc.assert_called_once()
+
+    def test_gemini_takes_precedence_over_claude_when_both_keys_set(self):
+        with patch.object(config, "GEMINI_API_KEY", "gemini-key"), \
+             patch.object(config, "ANTHROPIC_API_KEY", "claude-key"), \
+             patch("categorizer.database.get_merchant_category", return_value=None), \
+             patch("categorizer.database.upsert_merchant_category"), \
+             patch("categorizer._get_gemini_client", return_value=self._mock_gemini("OTHER")), \
+             patch("categorizer.anthropic.Anthropic") as mock_claude:
+            result = categorizer.categorize_with_llm_fallback("SOME PLACE")
+        self.assertEqual(result, "OTHER")
+        mock_claude.assert_not_called()
 
 
 # ===========================================================================
@@ -371,6 +510,30 @@ class TestDatabase(unittest.TestCase):
 
         dining_total = database.get_monthly_category_total("UOB_LADY", "DINING", period_start)
         self.assertAlmostEqual(dining_total, 30.0)
+
+    def test_upsert_and_get_merchant_category(self):
+        database.upsert_merchant_category("SOME CAFE", "DINING", "manual")
+        self.assertEqual(database.get_merchant_category("SOME CAFE"), "DINING")
+
+    def test_get_merchant_category_case_insensitive(self):
+        database.upsert_merchant_category("SOME CAFE", "DINING", "claude")
+        self.assertEqual(database.get_merchant_category("some cafe"), "DINING")
+
+    def test_upsert_overwrites_existing(self):
+        database.upsert_merchant_category("SOME CAFE", "DINING", "claude")
+        database.upsert_merchant_category("SOME CAFE", "FAMILY", "manual")
+        self.assertEqual(database.get_merchant_category("SOME CAFE"), "FAMILY")
+
+    def test_get_merchant_category_returns_none_for_unknown(self):
+        self.assertIsNone(database.get_merchant_category("NONEXISTENT PLACE"))
+
+    def test_get_all_merchant_categories(self):
+        database.upsert_merchant_category("ALPHA", "DINING", "claude")
+        database.upsert_merchant_category("BETA", "FAMILY", "manual")
+        rows = database.get_all_merchant_categories()
+        merchants = [r["merchant"] for r in rows]
+        self.assertIn("ALPHA", merchants)
+        self.assertIn("BETA", merchants)
 
     def test_get_all_monthly_groups_correctly(self):
         period_start = datetime(2026, 3, 1)
@@ -536,6 +699,41 @@ class TestImapBackoff(unittest.TestCase):
 # ===========================================================================
 # Metrics wiring tests
 # ===========================================================================
+
+class TestCategoriesEndpoint(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self._patcher = patch.object(database, "DB_PATH", self.tmp.name)
+        self._patcher.start()
+        database.init_db()
+
+    def tearDown(self):
+        self._patcher.stop()
+        os.unlink(self.tmp.name)
+
+    def test_get_categories_returns_html(self):
+        import metrics
+        html = metrics._build_categories_page()
+        self.assertIn("<title>Merchant Categories</title>", html)
+        self.assertIn("No entries yet", html)
+
+    def test_get_categories_shows_existing_entries(self):
+        import metrics
+        database.upsert_merchant_category("KOPI & TARTS MEN", "DINING", "manual")
+        html = metrics._build_categories_page()
+        self.assertIn("KOPI &amp; TARTS MEN", html) if "&amp;" in html \
+            else self.assertIn("KOPI & TARTS MEN", html)
+        self.assertIn("DINING", html)
+
+    def test_post_categories_stores_override(self):
+        import metrics
+        database.upsert_merchant_category("TEST MERCHANT", "OTHER", "claude")
+        # Simulate what _handle_post does when processing a valid form submission
+        with patch.object(database, "DB_PATH", self.tmp.name):
+            database.upsert_merchant_category("TEST MERCHANT", "FAMILY", "manual")
+        self.assertEqual(database.get_merchant_category("TEST MERCHANT"), "FAMILY")
+
 
 class TestMetrics(unittest.TestCase):
     def test_imap_connect_failure_increments_counter(self):

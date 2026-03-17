@@ -9,7 +9,9 @@ Starts a background HTTP server on METRICS_PORT (default 9090) serving:
 
 import json
 import threading
+import urllib.parse
 from http.server import HTTPServer
+from pathlib import Path
 import logging
 
 from prometheus_client import Counter, Gauge
@@ -82,6 +84,37 @@ def _build_status() -> dict:
     return result
 
 
+_CATEGORY_OPTIONS = ["DINING", "FAMILY", "OTHER", "HEALTH", "TRANSPORT", "SHOPPING", "TRAVEL"]
+_TEMPLATE_PATH = Path(__file__).parent / "templates" / "categories.html"
+_TEMPLATE = _TEMPLATE_PATH.read_text(encoding="utf-8")
+
+
+def _build_categories_page() -> str:
+    rows = database.get_all_merchant_categories()
+    option_tags = "".join(f"<option>{c}</option>" for c in _CATEGORY_OPTIONS)
+
+    if rows:
+        parts = []
+        for r in rows:
+            sel_opts = "".join(
+                f'<option{"  selected" if r["category"] == c else ""}>{c}</option>'
+                for c in _CATEGORY_OPTIONS
+            )
+            parts.append(
+                f"<tr><td>{r['merchant']}</td><td>{r['source']}</td>"
+                f"<td>{r['updated_at']}</td>"
+                f"<td><form method='post' action='/categories' style='display:inline'>"
+                f"<input type='hidden' name='merchant' value='{r['merchant']}'>"
+                f"<select name='category'>{sel_opts}</select> "
+                f"<button type='submit'>Save</button></form></td></tr>"
+            )
+        table_rows = "\n    ".join(parts)
+    else:
+        table_rows = "<tr><td colspan='4'>No entries yet</td></tr>"
+
+    return _TEMPLATE.replace("{{TABLE_ROWS}}", table_rows).replace("{{OPTION_TAGS}}", option_tags)
+
+
 class _Handler(MetricsHandler):
     """HTTP handler serving /healthz, /status, and the Prometheus /metrics endpoint."""
 
@@ -103,8 +136,48 @@ class _Handler(MetricsHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(str(exc).encode())
+        elif self.path == "/categories":
+            try:
+                body = _build_categories_page().encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                logger.exception("Failed to build /categories response")
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(exc).encode())
         else:
             super().do_GET()
+
+    def do_POST(self):  # pylint: disable=invalid-name
+        """Handle category override submissions."""
+        if self.path == "/categories":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length).decode()
+                params = urllib.parse.parse_qs(raw)
+                merchant = params.get("merchant", [""])[0].strip()
+                category = params.get("category", [""])[0].strip().upper()
+                valid = {"FAMILY", "DINING", "OTHER", "HEALTH", "TRANSPORT", "SHOPPING", "TRAVEL"}
+                if merchant and category in valid:
+                    database.upsert_merchant_category(merchant, category, "manual")
+                    updated = database.update_transactions_category(merchant, category)
+                    logger.info(
+                        "Manual override: '%s' → %s (%d transaction(s) updated)",
+                        merchant, category, updated,
+                    )
+                self.send_response(303)
+                self.send_header("Location", "/categories")
+                self.end_headers()
+            except Exception:
+                logger.exception("Failed to process POST /categories")
+                self.send_response(500)
+                self.end_headers()
+        else:
+            self.send_response(405)
+            self.end_headers()
 
     def log_message(self, *args):  # silence per-request access logs
         pass

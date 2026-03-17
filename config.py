@@ -21,6 +21,7 @@ POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "10800"))
 DB_PATH = os.getenv("DB_PATH", "transactions.db")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 METRICS_PORT = int(os.getenv("METRICS_PORT", "9090"))
 
